@@ -7,7 +7,7 @@ Author: Ryan Gibbons, rmg at lbl dot gov
 ## Description
 * Converts GDS files into Geant4 geometries for use with G4CMP. 
 * Designed for superconducting devices, ~200 nm films on ~0.5 mm substrate.
-    - For other applications, noteably semiconductor devices, this will likely not work properly.
+    - For other applications, notably semiconductor devices, this will likely not work properly.
 * This is not a fully automatic process, users are expected to still use their brains.
 
 
@@ -58,7 +58,7 @@ python make_geant4.py config.yaml
 ### 1. Export GDS to npz files
 * `python chip_geometry.py file_name.gds`
 * Specify which superconducting layers you want to include. 
-    - If a layer is inverted (used for etching) then use `--invert-layer`
+    - If a layer is inverted (used for etching) then use `--invert-layers`
 * Each diced chip in the wafer has a npz output, ordered by column and row in the wafer. E.g., `C1R2.npz`
 * You should not need to open the npz files, but they may be useful for other applications.
 * The npz structure is explained further below.
@@ -78,7 +78,7 @@ python make_geant4.py config.yaml
 
 ### 4. Create Geant4 files
 * `python make_geant4.py config.yml`
-* This creates the geometry cc/hh files. Each component recieves a cc/hh file, which are included in a detector construction cc/hh file. 
+* This creates the geometry cc/hh files. Each component receives a cc/hh file, which are included in a detector construction cc/hh file. 
 * By default, every component is a child volume of the vacuum world volume.
 * Repeated components are not checked. If really want to G4 your x100 junction test chip, this will be terribly inefficient.
 
@@ -90,7 +90,7 @@ python make_geant4.py config.yaml
 
 ## Important notes
 * Your GDS file is assumed to have die trenches, or only be a single chip.
-* Complicated features, such as logos and debug/test features, might not turn out correct. It it important you manually verify each feature in Steps 2 and 3 above.
+* Complicated features, such as logos and debug/test features, might not turn out correct. It is important you manually verify each feature in Steps 2 and 3 above.
 * If you have a ground plane with lots of flux trapping holes, it might take several minutes to compile your project.
 * Objects are created using G4ExtrudedSolid of a 2D polygon. This minimizes artificial surfaces which should speed up performance.
 * Currently, only NIST materials can be specified e.g., "G4_Si". Custom materials must be manually written in your project.
@@ -143,7 +143,7 @@ python chip_geometry.py gds_file.gds [options]
 python plot_entries.py SOURCE --layer N [options]
 ```
  
-One image per object, drawn with its inserts cut out and its hole centres
+One image per object, drawn with its inserts cut out and its hole centers
 marked. Holes never get an image of their own.
  
 | Argument | Default | Description |
@@ -249,7 +249,7 @@ Omit the block, or pass `--no-detector`, to emit only the component files.
 | `world_margin_um` | `500` | world half-size = geometry extent + margin |
 | `world_half_size_um` | — | `[x, y, z]`, overrides the margin |
  
-The substrate is centred on the origin and every other layer sits on its top
+The substrate is centered on the origin and every other layer sits on its top
 face.
  
 &nbsp;
@@ -314,13 +314,13 @@ rule are reported and skipped.
 ### npz file structure
 * Each chip has one npz file, named by the column/row in your wafer.
 * Each npz file contains a dictionary.
-* Each entry in the dictionary is an `[N,2]` array of perimeter coordiantes of each object, in um.
+* Each entry in the dictionary is an `[N,2]` array of perimeter coordinates of each object, in um.
 * Coordinates are wrt each chip, NOT the wafer.
 * Etched inserts and flux trapping holes are labeled to the object in which it is contained.
-* For flux trapping holes, only the center coordiantes are saved.
+* For flux trapping holes, only the center coordinates are saved.
 * Objects are ordered by size.
 
-| Key | Descirption |
+| Key | Description |
 |---|---|
 | `L2_00000` | outer perimeter of the largest object on layer 2 |
 | `L2_00000_insert1` | a closed inner perimeter of the object |
