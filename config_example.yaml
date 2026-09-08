@@ -1,0 +1,156 @@
+# make_geant4.py configuration
+
+source: chips/C1R0.npz
+chip: C1R0
+output_dir: g4_geometry
+
+# Substrate
+substrate:
+  layer: 0
+  material: G4_Si
+  thickness_um: 500.0
+
+# Every superconducting layer will be the same thickeness.
+# G4CMP only suports 2D quasiparticle dynamics
+# For overlapping layers, the bottom-most layer will be used.
+layer_thickness_um: 0.1
+
+layers:
+  - layer: 1
+    material: G4_Nb
+  - layer: 2
+    material: G4_Al
+  - layer: 3
+    material: G4_Al
+
+# Deposition order, bottom to top. Defines the overlapping rules.
+stack_order: [1, 2, 3, 4]
+
+# Flux-trapping holes
+hole:
+  include: false
+  shape: square             # square | circle
+  size_um: 5.0
+  class_name: geometry_hole
+
+# Specify which items you want to include
+# Several options:
+items:
+  # every object on layer 2
+  - layer: 2
+    entries: all
+
+  # the 6 largest on layer 3
+  - layer: 3
+    entries: 6
+
+  # Specific volumes
+  - layer: 4
+    entries: [L4_00015, L4_00016, L4_00017]
+    material: G4_Cu # override material if you want to
+
+
+# Any volumes closer than this will be rounded to be touching
+touch_tolerance_nm: 1.0
+
+# The name of your boilerplate
+class_prefix: geometry
+
+# passed straight through to build_chip_geometry when source is a .gds
+build_options:
+  hole_max_size: 10.0
+
+# ---------------------------------------------------------------------------
+# Detector construction. Remove this block (or pass --no-detector) to emit only
+# the individual component files.
+detector:
+  class_name: MyDetectorConstruction
+  file_stem: construction
+  world_material: G4_Galactic
+  world_margin_um: 500          # world half-size = geometry extent + margin
+  # world_half_size_um: [10000, 10000, 10000]   # or state it outright
+
+# One entry per material used, keyed by the G4 material name. 'name' is the
+# lattice folder passed to LoadLattice. The superconductor block is optional;
+# without it the one-argument G4LatticePhysical constructor is used.
+lattices:
+  G4_Si:
+    name: Si
+    miller: [1, 0, 0]
+  G4_Al:
+    name: Al
+    miller: [1, 0, 0]
+    superconductor:
+      elScatMFP_nm: 10          # scattering length, depends on grain boundaries
+      delta0_eV: 0.000176       # zero temperature energy gap
+      Teff_K: 0.2               # effective temperature
+      Dn_um2_per_ns: 6          # normal-state electron diffusion constant
+      tauQPTrap_ms: 0.2         # local trapping time constant
+  G4_Nb:
+    name: Nb
+    miller: [1, 0, 0]
+    superconductor:
+      elScatMFP_nm: 10
+      delta0_eV: 0.00153
+      Teff_K: 0.2
+      Dn_um2_per_ns: 2
+      tauQPTrap_ms: 0.2
+
+boundaries:
+  # shared by every surface property
+  scattering:
+    anh_cutoff: 520.0
+    refl_cutoff: 350.0
+    anh_coeffs: [0, 0, 0, 0, 0, 1.51e-14]
+    diff_coeffs: []
+    spec_coeffs: []
+
+  # Default rules, matched on the pair of materials. Every touching pair of
+  # volumes uses the rule for its two materials unless a specific rule below
+  # names both volumes. 'params' is the ten G4CMPSurfaceProperty constructor
+  # arguments after the name, passed through in order.
+  defaults:
+    - materials: [G4_Si, G4_Galactic]
+      name: silicon_vacuum_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 1.0, 0.0, 0.0,
+               0.0, 1.0]
+    - materials: [G4_Al, G4_Galactic]
+      name: aluminum_vacuum_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 1.0, 0.0, 0.0,
+               0.0, 1.0]
+    - materials: [G4_Nb, G4_Galactic]
+      name: niobium_vacuum_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 1.0, 0.0, 0.0,
+               0.0, 1.0]
+    - materials: [G4_Si, G4_Al]
+      name: silicon_aluminum_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 0.0, 0.0, 0.0,
+               0.0, 1.0]
+    - materials: [G4_Si, G4_Nb]
+      name: silicon_niobium_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 0.0, 0.0, 0.0,
+               0.0, 1.0]
+    - materials: [G4_Al, G4_Al]
+      name: aluminum_aluminum_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 0.0, 0.0, 0.0,
+               0.0, 0.0]
+    - materials: [G4_Al, G4_Nb]
+      name: aluminum_niobium_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 0.0, 0.0, 0.0,
+               0.0, 0.0]
+
+  # Override for one named pair of volumes. Wins over the material rule.
+  # Volume names are <chip>_<entry>, the same names used for the classes.
+  specific:
+    - volumes: [C1R1_L2_00015, C1R1_L2_00016]
+      name: bowtie_junction_interface
+      params: [0.0, 1.0, 0.0, 0.0,
+               0.0, 0.0, 0.0, 0.0,
+               0.0, 0.5]
