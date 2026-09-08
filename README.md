@@ -1,6 +1,6 @@
 # gds2_geant4
 
-Author: Ryan Gibbons, rmg at lbl dot gov
+Author: Ryan Gibbons, rgibbons@berkeley.edu
 
 **In active development! Send me your requests/bugs/complaints.**
 
