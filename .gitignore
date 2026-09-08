@@ -1,0 +1,54 @@
+# --- what the tools write -------------------------------------------------
+# Default output directories: chip_geometry.py --out chips/,
+# plot_entries.py --out plots/, make_geant4.py output_dir: g4_geometry/.
+# All of it is regenerated from the GDS in minutes, so none of it belongs
+# in the history.
+chips/
+plots/
+g4_geometry/
+
+# The same artefacts under any other --out name.
+*.npz
+*.png
+*.pdf
+*.svg
+
+# Generated Geant4 sources. Anything matching geometry_*.cc / .hh or
+# construction.* was written by make_geant4.py, and committing it means the
+# next regeneration shows up as a huge meaningless diff.
+geometry_*.cc
+geometry_*.hh
+construction.cc
+construction.hh
+
+# --- input data -----------------------------------------------------------
+# Layout files are large (the sample wafer is 20 MB) and are usually the
+# fab's, not the repo's. Keep them outside the tree, or force-add a small
+# fixture deliberately:  git add -f tests/tiny.gds
+*.gds
+*.gds.gz
+*.oas
+
+# --- python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# --- editors and OS -------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- local settings -------------------------------------------------------
+# config_example.yaml is tracked as the documented template. Working configs
+# usually carry local paths, so keep them out and name them anything else.
+config_local.yaml
+*.local.yaml
+.env
