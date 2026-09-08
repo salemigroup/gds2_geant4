@@ -143,8 +143,44 @@ G4VPhysicalVolume *{cls}::Construct()
 '''
 
 
-def var_for_material(mat):
-    return "mat_" + mat.replace("-", "_").replace(".", "_")
+def cpp_identifier(text, prefix=""):
+    """A valid C++ identifier from arbitrary text."""
+    out = "".join(c if c.isalnum() or c == "_" else "_" for c in text)
+    if not out or out[0].isdigit():
+        out = "_" + out
+    return prefix + out
+
+
+def material_variables(materials):
+    """Map each material name to a distinct C++ variable.
+
+    Material names are free text -- NIST names carry hyphens, custom ones can
+    carry dots, colons, spaces or anything else -- so they are sanitised rather
+    than used directly. Two different names can sanitise to the same thing
+    ("a-Si" and "a.Si"), so collisions get a numeric suffix instead of one
+    silently overwriting the other.
+    """
+    out, used = {}, set()
+    for mat in materials:
+        base = cpp_identifier(mat, "mat_")
+        name, n = base, 2
+        while name in used:
+            name, n = f"{base}_{n}", n + 1
+        used.add(name)
+        out[mat] = name
+    return out
+
+
+def validate_names(cfg):
+    """Surface-property names become C++ variables, so they must be usable."""
+    bad = []
+    for group in ("defaults", "specific"):
+        for rule in cfg.get("boundaries", {}).get(group, []):
+            if not rule["name"].isidentifier():
+                bad.append(rule["name"])
+    if bad:
+        sys.exit(f"boundary rule name(s) cannot be used as C++ variables: {bad}. "
+                 f"Use letters, digits and underscores, not starting with a digit.")
 
 
 def validate_boundaries(items, cfg, world_material, verbose=True):
@@ -183,41 +219,60 @@ def write_detector(items, cfg, out_dir, substrate_layer, verbose=True):
     stem = det.get("file_stem", "construction")
     world_material = det.get("world_material", "G4_Galactic")
     tol = cfg["touch_tolerance_nm"] / 1000.0
+    validate_names(cfg)
     validate_boundaries(items, cfg, world_material, verbose)
 
     # ---- z placement: substrate centred on the origin, stack on its top face
     sub_items = [it for it in items if it["layer"] == substrate_layer]
+    if not sub_items and substrate_layer is not None and verbose:
+        print(f"  warning: a substrate is configured on layer {substrate_layer} "
+              f"but no layer-{substrate_layer} objects are selected in 'items'. "
+              f"Nothing will sit on it and no substrate boundaries will be "
+              f"created -- add it to 'items' if you want them.")
     sub_half = sub_items[0]["z_half"] if sub_items else 0.0
     for it in items:
         it["z_center"] = 0.0 if it["layer"] == substrate_layer \
             else sub_half + it["z_half"]
 
     # ---- world size
+    # default world: a 10 cm cube, i.e. 50000 um half-size on each axis
     if det.get("world_half_size_um"):
         wx, wy, wz = det["world_half_size_um"]
-    else:
-        margin = det.get("world_margin_um", 500.0)
+    elif det.get("world_margin_um") is not None:
+        margin = det["world_margin_um"]
         xs = [v for it in items for v in it["geom"].bounds[0::2]]
         ys = [v for it in items for v in it["geom"].bounds[1::2]]
         zs = [abs(it["z_center"]) + it["z_half"] for it in items]
         wx = max(abs(min(xs)), abs(max(xs))) + margin
         wy = max(abs(min(ys)), abs(max(ys))) + margin
         wz = max(zs) + margin
+    else:
+        wx = wy = wz = 50000.0
+
+    # the world has to actually contain everything
+    ext_x = max(max(abs(v) for v in it["geom"].bounds[0::2]) for it in items)
+    ext_y = max(max(abs(v) for v in it["geom"].bounds[1::2]) for it in items)
+    ext_z = max(abs(it["z_center"]) + it["z_half"] for it in items)
+    if (ext_x > wx or ext_y > wy or ext_z > wz) and verbose:
+        print(f"  warning: geometry extends to "
+              f"({ext_x:.1f}, {ext_y:.1f}, {ext_z:.3f}) um but the world "
+              f"half-size is ({wx:.1f}, {wy:.1f}, {wz:.1f}) um")
 
     materials = OrderedDict()
     materials[world_material] = None
     for it in items:
         materials.setdefault(it["material"], None)
+    mvar = material_variables(materials)
 
     lines = []
     for mat in materials:
-        lines.append(f'    G4Material* {var_for_material(mat)} = '
+        lines.append(f'    G4Material* {mvar[mat]} = '
                      f'nist->FindOrBuildMaterial("{mat}");')
     material_lines = "\n".join(lines) + "\n"
 
     body = SOURCE_HEAD.format(
         header=f"{stem}.hh", cls=cls, sub_half=sub_half,
-        material_lines=material_lines, world_var=var_for_material(world_material),
+        material_lines=material_lines, world_var=mvar[world_material],
         wx=wx, wy=wy, wz=wz)
 
     # ---- placements, grouped by layer like a hand-written file
@@ -246,8 +301,8 @@ def write_detector(items, cfg, out_dir, substrate_layer, verbose=True):
     if missing:
         sys.exit(f"config has no 'lattices' entry for {missing}")
     for mat in used:
-        body += (f"    G4LatticeLogical* logic_{var_for_material(mat)}_lattice = "
-                 f'LM->LoadLattice({var_for_material(mat)}, "{lattices[mat]["name"]}");\n')
+        body += (f"    G4LatticeLogical* logic_{mvar[mat]}_lattice = "
+                 f'LM->LoadLattice({mvar[mat]}, "{lattices[mat]["name"]}");\n')
 
     sc_emitted = set()
     body += "\n    // Physical lattices\n"
@@ -256,7 +311,7 @@ def write_detector(items, cfg, out_dir, substrate_layer, verbose=True):
         if not sc or mat in sc_emitted:
             continue
         sc_emitted.add(mat)
-        v = var_for_material(mat)
+        v = mvar[mat]
         body += (
             f"    G4double dp_polycryElScatMFP_{v} = {sc['elScatMFP_nm']} * CLHEP::nm;"
             f"   // scattering length, depends on grain boundaries\n"
@@ -270,7 +325,7 @@ def write_detector(items, cfg, out_dir, substrate_layer, verbose=True):
             f"   // local trapping time constant\n")
 
     for it in items:
-        v = var_for_material(it["material"])
+        v = mvar[it["material"]]
         sc = lattices[it["material"]].get("superconductor")
         args = f"logic_{v}_lattice"
         if sc:

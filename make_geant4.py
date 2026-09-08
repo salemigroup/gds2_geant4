@@ -45,10 +45,12 @@ DEFAULTS = {
     "layer_thickness_um": 0.1,
     "output_dir": "g4_geometry",
     "touch_tolerance_nm": 1.0,
-    "hole": {"shape": "square", "size_um": 5.0, "class_name": "geometry_hole"},
+    "hole": {"shape": "square", "size_um": 5.0, "class_name": "geometry_hole",
+             "include": True},
     "class_prefix": "geometry",
     "warn_vertices": 2000,
     "warn_holes": 200,
+    "warn_objects_per_layer": 500,
 }
 
 
@@ -63,6 +65,21 @@ def load_config(path):
         cfg = yaml.safe_load(text)
     else:
         cfg = json.loads(text)
+
+    known = set(DEFAULTS) | {"source", "layers", "items", "substrate",
+                             "detector", "lattices", "boundaries",
+                             "stack_order"}
+    unknown = sorted(set(cfg) - known)
+    if unknown:
+        hint = ""
+        if {"invert_layers", "build_options"} & set(unknown):
+            hint = ("\n  How the GDS is read is chip_geometry.py's job, not this "
+                    "script's. Run it with the settings you want, e.g.\n"
+                    "      python chip_geometry.py wafer.gds --layers 0,1,2 "
+                    "--invert-layers 1 --out chips/\n"
+                    "  then point 'source' at chips/<chip>.npz.")
+        sys.exit(f"unrecognised config key(s): {unknown}. Nothing reads them, "
+                 f"so they would be silently ignored.{hint}")
 
     out = dict(DEFAULTS)
     out.update(cfg)
@@ -137,6 +154,8 @@ def resolve_overlaps(items, skip_layers=(), stack_order=None, verbose=True):
                 cut = it["geom"].difference(placed)
                 if cut.is_empty:
                     it["geom"] = cut
+                    it["covered_by"] = sorted(l for l in by_layer
+                                              if l < it["layer"])
                     n_cut += 1
                     continue
                 if abs(before - cut.area) > 1e-9:
@@ -529,6 +548,17 @@ def collect_items(chips, cfg):
                 geom=rebuild_polygon(chip, key),
                 holes=[tuple(c) for c in hole_centers(chip, key)],
             ))
+    per_layer = defaultdict(int)
+    for it in items:
+        per_layer[it["layer"]] += 1
+    for layer, n in sorted(per_layer.items()):
+        if n > cfg["warn_objects_per_layer"]:
+            print(f"  warning: layer {layer} contributes {n} objects, so this "
+                  f"run will write about {2 * n} files. A layer that should be "
+                  f"a few large shapes but arrives as thousands of small ones "
+                  f"is usually drawn with negative tone: re-run "
+                  f"chip_geometry.py with --invert-layers {layer}. Otherwise "
+                  f"narrow 'entries', or check with --dry-run.")
     if duplicates:
         print(f"  {len(duplicates)} entries selected more than once, "
               f"kept once each: {sorted(set(duplicates))[:4]}")
@@ -551,18 +581,26 @@ def main(argv=None):
     if not src.exists():
         sys.exit(f"no such source: {src}")
 
-    from chip_geometry import build_chip_geometry, load_npz, load_packed
-
+    # This script does not read GDS. Extraction is chip_geometry.py's job, and
+    # doing it here would silently use that script's defaults -- no inverted
+    # layers, no hole layers -- which is rarely what the layout needs.
     if src.suffix.lower() == ".gds":
-        # only the layers actually selected are built; a layer defined in
-        # 'layers' but never used in 'items' costs nothing
-        layers = sorted({spec["layer"] for spec in cfg["items"]})
-        chips = build_chip_geometry(src, layers=layers,
-                                    **cfg.get("build_options", {}))
-    else:
-        z = np.load(src, allow_pickle=True)
-        chips = (load_packed(src) if any(n.endswith("__xy") for n in z.files)
-                 else {cfg["chip"] or src.stem: load_npz(src)})
+        layers = ",".join(str(l) for l in
+                          sorted({spec["layer"] for spec in cfg["items"]}))
+        sys.exit(
+            f"'source' is a .gds. This script builds Geant4 files from geometry "
+            f"that chip_geometry.py has already extracted, so run that first:\n"
+            f"    python chip_geometry.py {src.name} --layers {layers} "
+            f"--out chips/\n"
+            f"  adding --invert-layers / --hole-layers as that run reports, "
+            f"then set\n"
+            f"    source: chips/<chip>.npz")
+
+    from chip_geometry import load_npz, load_packed
+
+    z = np.load(src, allow_pickle=True)
+    chips = (load_packed(src) if any(n.endswith("__xy") for n in z.files)
+             else {cfg["chip"] or src.stem: load_npz(src)})
 
     chip_id, items = collect_items(chips, cfg)
     print(f"chip {chip_id}: {len(items)} objects selected")
@@ -579,7 +617,9 @@ def main(argv=None):
     for it in items:
         parts = explode(it["geom"])
         if not parts:
-            print(f"  {it['entry']}: fully covered by a lower layer, skipped")
+            below = it.get("covered_by") or ["a lower layer"]
+            print(f"  {it['entry']}: fully covered by layer(s) "
+                  f"{below}, skipped")
             continue
         for n, part in enumerate(parts, start=1):
             rec = dict(it, geom=part)
@@ -592,6 +632,14 @@ def main(argv=None):
             print(f"  {it['entry']}: split into {len(parts)} parts by the "
                   f"overlap cut")
 
+    if not cfg["hole"].get("include", True):
+        dropped = sum(len(it["holes"]) for it in expanded)
+        for it in expanded:
+            it["holes"] = []
+        if dropped:
+            print(f"  holes: {dropped} centres ignored, solids left unperforated "
+                  f"(hole.include is false)")
+
     for it in expanded:
         nv = len(it["geom"].exterior.coords) - 1
         if nv > cfg["warn_vertices"]:
@@ -601,7 +649,8 @@ def main(argv=None):
                   f"this will be slow to navigate in Geant4")
 
     if args.dry_run:
-        print(f"\nwould write {2 * (len(expanded) + 1)} files:")
+        n_holes = sum(len(it["holes"]) for it in expanded)
+        print(f"\nwould write {2 * (len(expanded) + (1 if n_holes else 0))} files:")
         for it in expanded[:10]:
             print(f"   {it['class']}.hh / .cc  "
                   f"({len(it['geom'].exterior.coords) - 1} verts, "
@@ -613,9 +662,14 @@ def main(argv=None):
 
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    written = write_hole_class(cfg, out_dir)
+    # the shared hole class is only worth writing if something subtracts it
+    n_holes = sum(len(it["holes"]) for it in expanded)
+    written = write_hole_class(cfg, out_dir) if n_holes else []
     for it in expanded:
         written += write_component(it, cfg, out_dir)
+    if n_holes:
+        print(f"  holes: {n_holes} subtractions across "
+              f"{sum(1 for it in expanded if it['holes'])} objects")
 
     if cfg.get("detector") and not args.no_detector:
         from detector_builder import write_detector

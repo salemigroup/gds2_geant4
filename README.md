@@ -12,7 +12,7 @@ Author: Ryan Gibbons, rmg at lbl dot gov
 
 
 ### AI Disclaimer
-* This project contains code generated with Claude. A human writing this code would be, at best, a character building exercise.
+* This project contains code generated with Claude.
 * Human review of the outputs is part of how this utility works. The user is responsible for checking outputs are accurate.
 
 
@@ -37,16 +37,16 @@ pip install shapely>=2.0, gdstk, pyyaml, numpy, matplotlib
 ### Geant4 output:
 * The generated Geant4 code is intended for Geant4 v11.4.1, which is required for quasiparticle dynamics in G4CMP.
 * If you only want phonon physics, the code should work in Geant4 v10.4 - v10.7. 
-* C++ code follows C++11 standard. The author uses the GCC compiler. 
+* C++ code follows C++11 standard, and was tested with the GCC compiler. 
 
 
 ## Quick start
 ```bash
 # 1. Export GDS to npz
-python chip_geometry.py wafer.gds --layers 2 --out chips/
+python chip_geometry.py wafer.gds --layers 0,1,2,3,4 --invert-layers 1 --out chips/
  
 # 2. Verify each component
-python plot_entries.py chips/C1R1.npz --layer 2 --out plots/
+python plot_entries.py chips/C1R1.npz --layers 2 --overview --out plots/
  
 # 3. Generate Geant4
 python make_geant4.py config.yaml
@@ -57,6 +57,8 @@ python make_geant4.py config.yaml
 ## More details
 ### 1. Export GDS to npz files
 * `python chip_geometry.py file_name.gds`
+* Specify which superconducting layers you want to include. 
+    - If a layer is inverted (used for etching) then use `--invert-layer`
 * Each diced chip in the wafer has a npz output, ordered by column and row in the wafer. E.g., `C1R2.npz`
 * You should not need to open the npz files, but they may be useful for other applications.
 * The npz structure is explained further below.
@@ -65,6 +67,7 @@ python make_geant4.py config.yaml
 ### 2. Generate plots of each component
 * `python plot_entries.py CXRY.npz`
 * This will create and save plots of each component in the dictionary.
+* If you are very confident in this code, you can skip directly to step 3.
 
 
 ### 3. Write the config file
@@ -86,8 +89,7 @@ python make_geant4.py config.yaml
 
 
 ## Important notes
-* Your GDS file is assumed to have die trenches, or only be a single chip. 
-* Etching layers (in which what is drawn corresponds to what will be etched away) are not supported, and must be implemented manually. You can do this with G4SubtractionSolid.
+* Your GDS file is assumed to have die trenches, or only be a single chip.
 * Complicated features, such as logos and debug/test features, might not turn out correct. It it important you manually verify each feature in Steps 2 and 3 above.
 * If you have a ground plane with lots of flux trapping holes, it might take several minutes to compile your project.
 * Objects are created using G4ExtrudedSolid of a 2D polygon. This minimizes artificial surfaces which should speed up performance.
@@ -96,6 +98,7 @@ python make_geant4.py config.yaml
     * Refer to the quasiparticle example in G4CMP for more details on how to design your project.
     * Remember: your substrate contains >99.99% of the total mass and dicing introduces a larger uncertainty than the film mass.
 * Any overlap/gap between features that are < 1 nm are automatically rounded to be touching by default. This can be changed in the config file.
+* Viewing the Geant4 geometry can be tricky since the meshing here is complicated. Inserting a bunch of geantinos that immediately die or having a very low energy electrons is one way around this.
 
 
 ## Reference of arguments and syntax
@@ -110,6 +113,7 @@ python chip_geometry.py gds_file.gds [options]
 |---|---|---|
 | `gds_file.gds` | required | Input GDS file |
 | `--layers` | every layer | Comma-separated layer numbers, e.g. `2,3` |
+| `--invert-layers` | none | Comma-separated layer number to invert, e.g. `2,3` |
 | `--datatype` | `0` | Datatype filter; `-1` for any |
 | `--out` | `chips/` | Output directory, or a `.npz` path with `--packed`/`--single-file` |
 | `--chip-layer` | `0` | Layer holding the substrate/die trenches |
@@ -146,7 +150,8 @@ marked. Holes never get an image of their own.
 |---|---|---|
 | `source` | required | A `.npz` from `chip_geometry.py`, or a `.gds` directly |
 | `--chip` | — | Chip id, e.g., `C1R1`. Required unless the source is a single-chip `.npz` |
-| `--layer` | required | Layer number. Optional only with `--list` |
+| `--layers` | required | Layer number |
+| `--overview` | off | Creates a plot of the entire chip |
 | `--out` | `plots/` | Output directory, created if needed |
 | `--limit` | all | Plot only the first N objects |
 | `--hole-max-size` | `20` | Skip objects this size or smaller in um across, so perforations don't each get an image. `0` plots everything |
@@ -185,7 +190,7 @@ python make_geant4.py CONFIG [--dry-run] [--no-detector]
  
 | Key | Required | Default | Meaning |
 |---|---|---|---|
-| `source` | yes | — | a `.gds`, or an `.npz` from `chip_geometry.py` |
+| `source` | yes | — | An `.npz` file generated from `chip_geometry.py` |
 | `chip` | if the source holds several | — | chip id, e.g. `C1R1` |
 | `output_dir` | no | `g4_geometry` | where the `.cc`/`.hh` go |
 | `layers` | yes | — | list of `{layer, material, thickness_um?}` |
@@ -193,7 +198,7 @@ python make_geant4.py CONFIG [--dry-run] [--no-detector]
 | `stack_order` | no | Ascending layer number | Deposition order, bottom to top. The lower layer overrides any shared footprint |
 | `substrate` | no | — | `{layer, material, thickness_um}`. Excluded from overlap resolution |
 | `items` | yes | — | which objects to emit, see below |
-| `hole` | no | square, 5 um | `{shape, size_um, class_name}`. `shape` is `square` or `circle` |
+| `hole` | no | square, 5 um | `{include, shape, size_um, class_name}`. `shape` is `square` or `circle` |
 | `touch_tolerance_nm` | no | `1.0` | anything closer than this is snapped into exact contact |
 | `class_prefix` | no | `geometry` | prefix for generated class names |
 | `warn_vertices` | no | `2000` | warn above this many vertices in one solid |

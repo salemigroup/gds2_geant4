@@ -59,7 +59,7 @@ import numpy as np
 
 try:
     import gdstk
-    from shapely.geometry import MultiPolygon, Polygon, box
+    from shapely.geometry import MultiPolygon, Point, Polygon, box
     from shapely.ops import unary_union
 except ImportError as exc:  # pragma: no cover
     sys.exit(f"missing dependency: {exc}. Install with: pip install gdstk shapely")
@@ -71,6 +71,12 @@ META_LAYERS = "_layers"
 # Redundant collinear vertices are always dropped. The tolerance sits below the
 # usual 1 nm database grid, so nothing moves on-grid and the removal is lossless.
 COLLINEAR_TOL = 1e-4
+
+# Thresholds for reporting a layer as a likely perforation array. These are
+# deliberately only a diagnosis: a dense layer of small real features looks
+# identical by these measures, so acting on it is opt-in via auto_holes.
+AUTO_HOLE_MIN_COUNT = 100
+AUTO_HOLE_MIN_FRACTION = 0.9
 
 
 # --------------------------------------------------------------- reading a gds
@@ -364,8 +370,8 @@ def ring_centroid(arr) -> np.ndarray:
 def build_chip_geometry(gds, layers=None, datatype=0, grid=None, chip_layer=0,
                        chip_size=None, chip_min_size=1000.0,
                        simplify=0.0, min_area=0.0, all_cells=False,
-                       holes="centers", hole_max_size=20.0, hole_layers=None,
-                       verbose=True):
+                       holes="centers", hole_max_size=10.0, hole_layers=None,
+                       invert_layers=None, auto_holes=False, verbose=True):
     """Return ``{chip_id: {key: (N, 2) ndarray}}``, coordinates chip-relative.
 
     Parameters
@@ -395,7 +401,7 @@ def build_chip_geometry(gds, layers=None, datatype=0, grid=None, chip_layer=0,
                   records one centre point per hole and leaves every outline
                   hole-free; "rings" keeps them as explicit interior contours;
                   "drop" discards them entirely.
-    hole_max_size : the largest a hole may be, in um across (default 20). This
+    hole_max_size : the largest a hole may be, in um across (default 10). This
                   is only a cap that separates holes from real geometry, not the
                   hole size itself -- whatever size the file actually uses is
                   found and reported. Enclosed voids larger than this stay as
@@ -403,6 +409,21 @@ def build_chip_geometry(gds, layers=None, datatype=0, grid=None, chip_layer=0,
                   does not identify a hole: layer 1 of the sample wafer has 162
                   voids that are 165 x 323 um device clearances, an order of
                   magnitude clear of the 5 um holes on either side of the cap.
+    invert_layers : layers drawn with negative tone, where what is drawn is what
+                  gets etched away. For each such layer the metal is rebuilt as
+                  the chip minus the drawn clearances, giving a few large solid
+                  objects instead of thousands of fragments. Drawn shapes small
+                  enough to be perforations are held out of that subtraction and
+                  recorded as hole centres instead, so the plane comes out
+                  solid. GDS records nothing about polarity, so this has to be
+                  stated rather than detected.
+    auto_holes  : act on the perforation-array diagnosis below instead of only
+                  reporting it. Off by default, because "many identical small
+                  polygons" cannot be told apart from a dense layer of small
+                  real features by geometry alone, and acting on it wrongly
+                  deletes those features silently. The diagnosis is always
+                  printed, so the usual answer is to read it and then pass
+                  ``hole_layers`` for the layer it names.
     hole_layers : layers on which small *standalone* objects should also be
                   treated as holes, e.g. ``[1]`` for a fill array drawn as
                   separate positive squares rather than as voids. Their centres
@@ -460,10 +481,27 @@ def build_chip_geometry(gds, layers=None, datatype=0, grid=None, chip_layer=0,
     if holes not in ("centers", "rings", "drop"):
         raise ValueError("holes must be 'centers', 'rings' or 'drop'")
     hole_layers = set(hole_layers or ())
+    invert_layers = set(invert_layers or ())
+    if chip_layer in invert_layers and verbose:
+        print(f"warning: layer {chip_layer} is both the chip-outline layer and "
+              f"listed in invert_layers. Its drawn shapes are the chip "
+              f"outlines, so inverting it leaves nothing.")
     outside = defaultdict(int)          # lattice cells dropped for being unmarked
     hole_sizes = defaultdict(list)      # layer -> measured bounding-box sides
     loose_holes = defaultdict(list)     # (chip_id, layer) -> centres
     pending = defaultdict(list)         # (chip_id, layer) -> object records
+
+    def cell_of(cx, cy):
+        return (int(np.floor((cx - x0) / px)), int(np.floor((cy - y0) / py)))
+
+    def window_for(key):
+        if key not in cells:
+            c, r = key
+            cx = x0 + (c + 0.5) * px
+            cy = y0 + (r + 0.5) * py
+            cells[key] = (cx, cy, box(cx - win_x / 2, cy - win_y / 2,
+                                      cx + win_x / 2, cy + win_y / 2))
+        return cells[key]
 
     def emit(chip_id, layer, geom, origin):
         """Buffer one polygon as (outer perimeter, inserts, hole centres).
@@ -491,7 +529,88 @@ def build_chip_geometry(gds, layers=None, datatype=0, grid=None, chip_layer=0,
         t0 = time.time()
         floor = area_floor.get(layer, 0.0) if isinstance(min_area, dict) else min_area
 
+        # ---- negative tone: the metal is whatever was NOT drawn
+        if layer in invert_layers:
+            polys, scale, _ = load_polygons(Path(gds), layer, datatype)
+            if not polys:
+                if verbose:
+                    print(f"layer {layer}: nothing to export")
+                continue
+            cleared, hole_pts = [], []
+            for q in polys:
+                pts = np.asarray(q.points, dtype=float) * scale
+                if hole_size(pts) <= hole_max_size:
+                    hole_pts.append(pts)       # a perforation, not a clearance
+                else:
+                    g = Polygon(pts)
+                    cleared.append(g if g.is_valid else g.buffer(0))
+            cleared = unary_union(cleared) if cleared else None
+
+            keys = sorted(allowed) if allowed is not None else sorted(
+                {cell_of(*np.asarray(q.points).mean(axis=0) * scale)
+                 for q in polys})
+            n_parts = 0
+            for key in keys:
+                cx, cy, window = window_for(key)
+                chip_id = f"C{key[0]}R{key[1]}"
+                plane = window.difference(cleared) if cleared is not None else window
+                if simplify > 0:
+                    plane = plane.simplify(simplify, preserve_topology=True)
+                for part in explode(plane):
+                    if part.area <= 0 or (floor and part.area < floor):
+                        continue
+                    emit(chip_id, layer, part, np.array([cx, cy]))
+                    n_parts += 1
+            if holes != "drop":
+                for pts in hole_pts:
+                    ctr = ring_centroid(np.vstack([pts, pts[:1]]))
+                    key = cell_of(*ctr)
+                    if allowed is not None and key not in allowed:
+                        outside[key] += 1
+                        continue
+                    cx, cy, window = window_for(key)
+                    if not window.contains(Point(ctr)):
+                        continue               # in the street, not on the chip
+                    loose_holes[(f"C{key[0]}R{key[1]}", layer)].append(
+                        ctr - np.array([cx, cy]))
+                    hole_sizes[layer].append(hole_size(pts))
+            if verbose:
+                print(f"layer {layer}: inverted -> {n_parts} metal objects, "
+                      f"{len(hole_pts)} perforations, {time.time() - t0:.1f}s")
+                if n_parts == 0:
+                    print(f"   layer {layer} inverted to nothing: the drawn "
+                          f"shapes cover every chip, so there is no metal "
+                          f"left. Is this layer really negative tone?")
+            continue
+
         shapes, _, _ = layer_shapes(gds, layer, datatype, simplify)
+
+        # A layer that is overwhelmingly made of identical small polygons is a
+        # fill array drawn as separate shapes, not thousands of components.
+        # Emitting them as objects is the difference between 49 volumes and
+        # 29,870, so it is worth noticing without being asked.
+        if layer not in hole_layers and shapes:
+            small = [g for g in shapes
+                     if hole_size(np.asarray(g.exterior.coords)) <= hole_max_size]
+            frac = len(small) / len(shapes)
+            if len(small) >= AUTO_HOLE_MIN_COUNT and frac >= AUTO_HOLE_MIN_FRACTION:
+                if auto_holes:
+                    hole_layers.add(layer)
+                    if verbose:
+                        print(f"layer {layer}: {len(small)} of {len(shapes)} "
+                              f"objects are <= {hole_max_size} um across "
+                              f"({100*frac:.1f}%); treating them as a "
+                              f"perforation array (auto_holes is on).")
+                elif verbose:
+                    print(f"layer {layer}: {len(small)} of {len(shapes)} objects "
+                          f"are <= {hole_max_size} um across ({100*frac:.1f}%). "
+                          f"That looks like a perforation array drawn as "
+                          f"separate polygons, and emitting it as components "
+                          f"gives {len(shapes)} volumes instead of "
+                          f"{len(shapes) - len(small)}. If so, re-run with "
+                          f"--hole-layers {layer} (or --invert-layers {layer} "
+                          f"if the layer is also negative tone).")
+
         if not shapes:
             if verbose:
                 print(f"layer {layer}: nothing to export")
@@ -783,11 +902,20 @@ def main(argv=None):
                     help="how to represent small enclosed voids: record a centre "
                          "point per hole and keep outlines hole-free (default), "
                          "keep them as explicit interior rings, or discard them")
-    ap.add_argument("--hole-max-size", type=float, default=20.0,
+    ap.add_argument("--hole-max-size", type=float, default=10.0,
                     help="largest a hole may be, in um across; enclosed voids "
                          "bigger than this are treated as real geometry. A cap, "
                          "not the hole size, which is found from the file "
-                         "(default: 20)")
+                         "(default: 10)")
+    ap.add_argument("--invert-layers",
+                    help="comma-separated layers drawn with negative tone, e.g. "
+                         "'1'. The metal is rebuilt as the chip minus the drawn "
+                         "clearances and perforations become hole centres")
+    ap.add_argument("--auto-holes", action="store_true",
+                    help="act on the perforation-array diagnosis instead of "
+                         "only reporting it. Off by default: a dense layer of "
+                         "small real features looks the same and would be "
+                         "silently reduced to points")
     ap.add_argument("--hole-layers",
                     help="comma-separated layers where small standalone objects "
                          "are holes too, e.g. '1' for a fill array drawn as "
@@ -816,6 +944,9 @@ def main(argv=None):
         holes=args.holes, hole_max_size=args.hole_max_size,
         hole_layers=([int(v) for v in args.hole_layers.split(",")]
                      if args.hole_layers else None),
+        invert_layers=([int(v) for v in args.invert_layers.split(",")]
+                       if args.invert_layers else None),
+        auto_holes=args.auto_holes,
         simplify=args.simplify,
         min_area=parse_min_area(args.min_area))
     if not chips:

@@ -1,7 +1,7 @@
 # make_geant4.py configuration
 
-source: wafer.gds
-chip: C1R1
+source: chips/C1R0.npz
+chip: C1R0
 output_dir: g4_geometry
 
 # Substrate
@@ -28,6 +28,7 @@ stack_order: [1, 2, 3, 4]
 
 # Flux-trapping holes
 hole:
+  include: false
   shape: square             # square | circle
   size_um: 5.0
   class_name: geometry_hole
@@ -57,7 +58,7 @@ class_prefix: geometry
 
 # passed straight through to build_chip_geometry when source is a .gds
 build_options:
-  hole_max_size: 20.0
+  hole_max_size: 10.0
 
 # ---------------------------------------------------------------------------
 # Detector construction. Remove this block (or pass --no-detector) to emit only
