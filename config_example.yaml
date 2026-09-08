@@ -56,9 +56,6 @@ touch_tolerance_nm: 1.0
 # The name of your boilerplate
 class_prefix: geometry
 
-# passed straight through to build_chip_geometry when source is a .gds
-build_options:
-  hole_max_size: 10.0
 
 # ---------------------------------------------------------------------------
 # Detector construction. Remove this block (or pass --no-detector) to emit only
