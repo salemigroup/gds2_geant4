@@ -2,7 +2,9 @@
 
 Author: Ryan Gibbons, rgibbons@berkeley.edu
 
-**In active development! Send me your requests/bugs/complaints.**
+
+> [!NOTE]
+> **In active development! Send me your requests/bugs/complaints.**
 
 ## Description
 * Converts GDS files into Geant4 geometries for use with G4CMP. 
@@ -11,17 +13,17 @@ Author: Ryan Gibbons, rgibbons@berkeley.edu
 * This is not a fully automatic process, users are expected to still use their brains.
 
 
-### AI Disclaimer
+## AI Disclaimer
 * This project contains code generated with Claude.
 * Human review of the outputs is part of how this utility works. The user is responsible for checking outputs are accurate.
 
 
-### Change log
+## Change log
 * 2025-09-08: First complete iteration.
 
-## Dependencies 
+# Dependencies 
 
-### Running python scripts:
+## Running python scripts:
 * Python ≥ 3.8
     - shapely ≥ 2.0
     - gdstk
@@ -34,19 +36,19 @@ Install using pip:
 pip install shapely>=2.0, gdstk, pyyaml, numpy, matplotlib
 `
 
-### Geant4 output:
+## Geant4 output:
 * The generated Geant4 code is intended for Geant4 v11.4.1, which is required for quasiparticle dynamics in G4CMP.
 * If you only want phonon physics, the code should work in Geant4 v10.4 - v10.7. 
 * C++ code follows C++11 standard, and was tested with the GCC compiler. 
 
 
-## Quick start
+# Quick start
 ```bash
 # 1. Export GDS to npz
 python chip_geometry.py wafer.gds --layers 0,1,2,3,4 --invert-layers 1 --out chips/
  
 # 2. Verify each component
-python plot_entries.py chips/C1R1.npz --layers 2 --overview --out plots/
+python plot_entries.py chips/C1R1.npz --layers 2 --out plots/
  
 # 3. Generate Geant4
 python make_geant4.py config.yaml
@@ -54,8 +56,8 @@ python make_geant4.py config.yaml
 
 
 
-## More details
-### 1. Export GDS to npz files
+# More details
+## 1. Export GDS to npz files
 * `python chip_geometry.py file_name.gds`
 * Specify which superconducting layers you want to include. 
     - If a layer is inverted (used for etching) then use `--invert-layers`
@@ -64,31 +66,31 @@ python make_geant4.py config.yaml
 * The npz structure is explained further below.
 
 
-### 2. Generate plots of each component
+## 2. Generate plots of each component
 * `python plot_entries.py CXRY.npz`
 * This will create and save plots of each component in the dictionary.
 * If you are very confident in this code, you can skip directly to step 3.
 
 
-### 3. Write the config file
+## 3. Write the config file
 * Inspect the plots you created in Step 2. This is critical for having accurate output. 
 * If any component doesn't look quite right, you will need to manually insert it later. 
 * Create a yaml config file based on the plots. See the example config file.
 
 
-### 4. Create Geant4 files
+## 4. Create Geant4 files
 * `python make_geant4.py config.yml`
 * This creates the geometry cc/hh files. Each component receives a cc/hh file, which are included in a detector construction cc/hh file. 
 * By default, every component is a child volume of the vacuum world volume.
 * Repeated components are not checked. If really want to G4 your x100 junction test chip, this will be terribly inefficient.
 
 
-### 5. Add to your project
+## 5. Add to your project
 * This can be as simple as copy paste all of the files created in Step 4, and making sure your existing project knows about these files. 
 * The user is assumed to have basic knowledge of Geant4 code structure.
 
 
-## Important notes
+# Important notes
 * Your GDS file is assumed to have die trenches, or only be a single chip.
 * Complicated features, such as logos and debug/test features, might not turn out correct. It is important you manually verify each feature in Steps 2 and 3 above.
 * If you have a ground plane with lots of flux trapping holes, it might take several minutes to compile your project.
@@ -101,9 +103,9 @@ python make_geant4.py config.yaml
 * Viewing the Geant4 geometry can be tricky since the meshing here is complicated. Inserting a bunch of geantinos that immediately die or having a very low energy electrons is one way around this.
 
 
-## Reference of arguments and syntax
+# Reference of arguments and syntax
 
-### chip_geometry.py
+## chip_geometry.py
  
 ```
 python chip_geometry.py gds_file.gds [options]
@@ -137,7 +139,7 @@ python chip_geometry.py gds_file.gds [options]
 &nbsp;
 
  
-### plot_entries.py
+## plot_entries.py
  
 ```
 python plot_entries.py SOURCE --layer N [options]
@@ -166,7 +168,7 @@ Files are named `<chip>_<entry>.<format>`, e.g. `C1R1_L2_00000.png`.
 &nbsp;
 &nbsp;
  
-### make_geant4.py
+## make_geant4.py
  
 ```
 python make_geant4.py CONFIG [--dry-run] [--no-detector]
@@ -184,9 +186,9 @@ python make_geant4.py CONFIG [--dry-run] [--no-detector]
 &nbsp;
 &nbsp;
 
-### Config file
+## Config file
 
-#### Top level
+### Top level
  
 | Key | Required | Default | Meaning |
 |---|---|---|---|
@@ -212,7 +214,7 @@ python make_geant4.py CONFIG [--dry-run] [--no-detector]
 &nbsp;
 &nbsp;
 
-#### `items`
+### `items`
  
 Each block picks a layer and says which entries. Objects are numbered largest
 first, so `L2_00000` is the biggest on that layer.
@@ -237,7 +239,7 @@ with a warning.
 &nbsp;
 &nbsp;
 
-#### `detector`
+### `detector`
  
 Omit the block, or pass `--no-detector`, to emit only the component files.
  
@@ -255,7 +257,7 @@ face.
 &nbsp;
 &nbsp;
 
-#### `lattices`
+### `lattices`
  
 Keyed by G4 material name. One entry per material used.
  
@@ -271,7 +273,7 @@ Keyed by G4 material name. One entry per material used.
 &nbsp;
 &nbsp;
 
-#### `boundaries`
+### `boundaries`
  
 ```yaml
 boundaries:
@@ -311,7 +313,7 @@ rule are reported and skipped.
 &nbsp;
 
 
-### npz file structure
+## npz file structure
 * Each chip has one npz file, named by the column/row in your wafer.
 * Each npz file contains a dictionary.
 * Each entry in the dictionary is an `[N,2]` array of perimeter coordinates of each object, in um.
